@@ -1,0 +1,77 @@
+name: fiber-event-hub-demo
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+  eventhubs:
+    image: mcr.microsoft.com/azure-messaging/eventhubs-emulator:2.1.0
+    environment:
+      ACCEPT_EULA: ${ACCEPT_EULA:-N}
+      BLOB_SERVER: azurite
+      METADATA_SERVER: azurite
+    volumes:
+      - ./config/eventhubs.json:/Eventhubs_Emulator/ConfigFiles/Config.json:ro
+    ports:
+      - "127.0.0.1:${KAFKA_HOST_PORT:-59092}:9092"
+      - "127.0.0.1:${EMULATOR_HEALTH_PORT:-55300}:5300"
+    depends_on:
+      - azurite
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: fiber
+      POSTGRES_USER: fiber
+      POSTGRES_PASSWORD: fiber-local-only
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fiber -d fiber"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  sink:
+    image: fiber-event-hub-demo:local
+    build: .
+    command: ["sink"]
+    environment: &app-env
+      KAFKA_BOOTSTRAP_SERVERS: eventhubs:9092
+      EVENTHUB_CONNECTION_STRING: Endpoint=sb://eventhubs;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+      DATABASE_URL: postgresql://fiber:fiber-local-only@postgres:5432/fiber
+      KAFKAJS_LOG_LEVEL: ${KAFKAJS_LOG_LEVEL:-error}
+    depends_on:
+      eventhubs:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+    stop_grace_period: 30s
+  app:
+    image: fiber-event-hub-demo:local
+    build: .
+    profiles: ["tools"]
+    environment: *app-env
+    volumes:
+      - ./:/workspace:ro
+    depends_on:
+      eventhubs:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+  web:
+    image: fiber-event-hub-demo:local
+    build: .
+    entrypoint: ["node", "src/web-server.js"]
+    environment: *app-env
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-58080}:8088"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sink:
+        condition: service_started
+    restart: on-failure
+    stop_grace_period: 30s
+volumes:
+  postgres-data:

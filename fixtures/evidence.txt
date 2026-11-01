@@ -1,0 +1,3 @@
+SYNTHETIC DEMO ONLY - no patient data.
+Payer approved prior authorization AUTH-DEMO-2026 for the synthetic encounter.
+Coverage: 2026-10-01 through 2026-10-31. This is a teaching fixture, not a real document.

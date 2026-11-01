@@ -1,0 +1,35 @@
+{
+  "name": "fiber-event-hub-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Humata → Event Hubs Kafka → PostgreSQL → Flow demo",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "postinstall": "node scripts/patch-kafkajs.js",
+    "start": "node src/cli.js",
+    "test": "node --test tests/*.test.js",
+    "test:unit": "node --test tests/domain.test.js",
+    "test:acceptance": "node tests/acceptance.js",
+    "web": "node src/web-server.js",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build:web": "tsc --noEmit -p web/tsconfig.json && vite build --config web/vite.config.ts"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "kafkajs": "2.2.4",
+    "pg": "8.16.3",
+    "express": "5.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "lucide-react": "1.66.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}

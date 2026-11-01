@@ -1,0 +1,18 @@
+{
+  "UserConfig": {
+    "NamespaceConfig": [{
+      "Type": "EventHub",
+      "Name": "emulatorNs1",
+      "Entities": [{
+        "Name": "prior-authorization",
+        "PartitionCount": 2,
+        "ConsumerGroups": [{"Name": "r1dp-sink"}]
+      }, {
+        "Name": "prior-authorization-tests",
+        "PartitionCount": 2,
+        "ConsumerGroups": [{"Name": "r1dp-tests"}]
+      }]
+    }],
+    "LoggingConfig": {"Type": "Console"}
+  }
+}

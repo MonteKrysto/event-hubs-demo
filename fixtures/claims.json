@@ -1,0 +1,3 @@
+[
+  {"claim_id":"CLAIM-DEMO-001","tenant_id":"demo-hospital","account_id":"FLOW-ACCOUNT-001","encounter_id":"FLOW-ENC-001","denial_reason":"missing_authorization","service_date":"2026-10-15"}
+]
