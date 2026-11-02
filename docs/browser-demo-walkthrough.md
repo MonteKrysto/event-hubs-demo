@@ -14,75 +14,106 @@ Open the overview at [http://localhost:58080](http://localhost:58080). It shows 
 
 The port can be changed with `WEB_HOST_PORT` in `.env`. `make web` prints the configured address.
 
-## 1. Start a fresh scenario
+## Choose an encounter or add practice data
 
-Click **Start new scenario**. Both apps get a new synthetic encounter and claim with fresh identifiers. Existing history is retained; the new scenario is isolated from earlier runs.
+The **Encounter** selector switches both apps to the same encounter. Each encounter keeps its own authorization history, last Flow load, and evaluation. **New encounter** starts a fresh case without deleting earlier work.
 
-Starting a scenario does not publish an event. Flow initially has no pulled authorization data, and **Review denial** is disabled until a pull has been made.
+**Add sample encounters** adds 48 fictional encounters with 126 authorization updates. The examples include six procedures, four payers, provider information, claim amounts, service dates, and original denial dates. **Encounter details** reveals the extra context without filling the main workspace with fields.
 
-## 2. Publish decisions in Humata
+The sample authorization histories pass through the existing producer, Event Hubs Kafka endpoint, and receiver. Adding the cases does not insert received events directly into history or automatically load anything into Flow. Repeating the action reuses the existing sample cases and resumes an interrupted delivery without duplicating decisions. Your currently selected encounter is preserved.
 
-Try these buttons in order:
+The first eight cases illustrate these outcomes; the remaining cases repeat the patterns with different encounter details:
 
-1. **Authorization required**
-2. **Attempt authorization**
-3. **Submit request**
-4. **Approve authorization**
+| Case | Authorization history |
+| --- | --- |
+| Demo patient 001 | Required → attempt → submitted → approved, with coverage for the service date |
+| Demo patient 002 | Authorization is required; approval is still needed |
+| Demo patient 003 | Request submitted, awaiting a decision |
+| Demo patient 004 | Request denied |
+| Demo patient 005 | Approved, but the approval dates do not cover the service date |
+| Demo patient 006 | Authorization not required |
+| Demo patient 007 | An authorization attempt has started |
+| Demo patient 008 | A later denial supersedes an earlier approval |
 
-The approval fields are prefilled with an authorization number and October 2026 coverage. The synthetic claim's service date is October 15, 2026, so the default approval covers it regardless of today's date.
+The first 24 cases retain the original missing-authorization denial. Cases 025–048 add paid claims, pending claims, and denials for service coverage or eligibility. They keep claim status independent of authorization status. For example, patient 026 is paid, 027 is pending, 028 has a service-coverage denial, and 029 has an eligibility denial. A covered authorization approval alone does not resolve a denial about a different issue. Patient aliases, payers, providers, identifiers, and amounts are fictional; procedure IDs are demo identifiers rather than billing codes. Older encounters retain their existing data and may have no additional descriptive details.
 
-Each click creates a new event ID and an increasing source revision. The server validates the event, records the publication attempt, and sends it through the existing KafkaJS producer.
+## Read the three separate facts
 
-The publication feed distinguishes event creation, broker acknowledgment, and history persistence. Expand an event to see its delivery steps, receiver receipt count, broker coordinates, and optional JSON payload.
+**Original claim denial** describes a claim that was already denied. Paid or pending examples instead say **Original claim status**. Updating authorization does not change a claim’s status or original denial reason. Paid and pending claims have no denial-evaluation action; you can still load their authorization histories.
 
-**Broker acknowledged** means Event Hubs accepted the message. **Saved to history** means the separate Kafka receiver actually committed it to PostgreSQL. Delivery can take a few seconds; the browser does not manufacture an arrival just because a button was clicked.
+**Humata’s latest status** shows the latest decision at the source, including its update number and decision time. **Loaded in Flow** shows the decision Flow explicitly loaded, with its update number and load time. They can differ. For example, Humata can show **Approved** while Flow still shows **Required — approval still needed** until you load again.
 
-If delivery cannot be confirmed, the activity card offers **Retry this event**. It reuses the same event ID and payload, so a prior successful delivery can be recognized safely. Successfully received events also offer **Replay this event**, which creates another delivery receipt without creating another unique fact.
+## 1. Choose an action in Humata
 
-## 3. Watch Flow's incoming activity
+The encounter shows all six authorization actions together:
 
-The incoming feed updates automatically when the receiver saves an event. This feed represents platform history, not Flow's account snapshot.
+| Button | What it represents |
+| --- | --- |
+| Require authorization | This visit needs prior authorization. |
+| No authorization needed | This visit does not need prior authorization. |
+| Start authorization | An attempt to obtain authorization has begun. |
+| Submit authorization request | The request has been submitted for a decision. |
+| Approve authorization | Authorization has been granted. |
+| Deny authorization | Authorization has not been granted. |
 
-Even after an approval appears in the incoming feed, the account still says **No authorization data pulled yet** until you pull it.
+These are simulated business actions. Each click creates and shares a real event through the local integration; it does not contact a payer. You can choose any action without following a required sequence.
 
-Connection indicators show the browser's live connection, Event Hubs availability, the receiver's recent broker heartbeat, and database availability. A stopped receiver cannot be mistaken for successful ingestion: an acknowledged event remains unsaved until the receiver processes it.
+For a first run, choose **Approve authorization**. The sample authorization number and dates are already filled in. **Approval number & dates** lets you edit them. The scenario’s service date is October 15, 2026, so the default approval covers the service date regardless of today’s date.
 
-## 4. Pull saved history into Flow
+**New encounter** creates a fresh encounter in both apps and keeps earlier history. Open browser tabs share the active scenario.
 
-Click **Pull latest data**.
+## 2. See what happened
 
-Flow queries PostgreSQL for this scenario's encounter and stores a snapshot of those events. It uses the generated crosswalk to match Humata's identifiers to Flow's account and encounter.
+A message under the action buttons names the decision you chose. It first shows that the update is being saved or shared, then confirms when it has reached shared history.
 
-The authorization section now shows the latest pulled state. For an approval, it includes the authorization number, coverage dates, and a **View demo evidence** button. The evidence is the same synthetic fixture referenced by the event; no real source document is fetched from Humata.
+**Shared successfully** means the separate receiver has saved the event in PostgreSQL. It does not mean Flow has loaded it yet. If delivery is unconfirmed, **Check delivery** opens the event details so you can inspect or retry it.
 
-This explicit pull represents the daily R1DP batch in the proposed architecture. The demo triggers it manually so you can see the boundary without waiting a day.
+## 3. Load the update into Flow
 
-## 5. Review the missing-authorization denial
+Click **Load latest update** in Flow. The comparison shows Humata’s latest status alongside the decision Flow has loaded. The loaded approval number and coverage dates appear below it. **Continue in Flow**, when shown under Humata, takes you to these controls without loading anything automatically.
 
-Click **Review denial**.
+The button reads saved PostgreSQL history and stores a snapshot for this encounter. PostgreSQL stands in for the proposed R1DP/Databricks history. This manual load represents Flow’s daily pull, without making you wait a day.
 
-The review reads only Flow's last pulled snapshot. With the default approval, it finds a matching encounter and coverage for the service date, and displays **Candidate for dispute review**.
+**View evidence for this decision** opens the synthetic source record referenced by the loaded event. New records match that decision and any custom approval details. Older events retain their original references and clearly label the reused legacy fixture. No real Humata document is fetched.
 
-This is a recommendation for a person to review the evidence. It does not submit an appeal or perform an external workflow action.
+## 4. Evaluate the denial
 
-## 6. Make the batch boundary visible
+For a denied claim, click **Evaluate denial**. Flow uses the information you last loaded. Paid and pending claims have no denial to evaluate. Denials about coverage or eligibility remain manual review even when an authorization approval exists, and the explanation identifies that difference.
 
-After pulling an approval, click **Deny** in Humata.
+With the default approval, the result is **Possible dispute — human review needed**. Open **Why this result?** to see the encounter match, approval status, date coverage, and evidence-reference checks. The claim remains denied. A person must review the source evidence and decide what to do; the demo does not submit an appeal.
 
-The denial appears in incoming history. Flow shows **New history available**, but its account snapshot and earlier recommendation remain unchanged. Reviewing again still uses the earlier pull.
+## 5. Try a different outcome
 
-Click **Pull latest data**, then **Review denial** again. Flow now sees the newer denial and recommends **Manual review needed**. The higher source revision wins even if an older event is replayed later.
+Click **Deny authorization** in Humata after loading and evaluating an approval.
 
-You can also test coverage by approving with dates outside October 15, then pulling and reviewing again.
+The new decision is shared, but Flow keeps its earlier loaded approval. A message says that a new update is available, and the earlier evaluation is labelled as using older information.
+
+Click **Load latest update**, then **Evaluate denial**. Flow now uses the denial and recommends **Manual review needed**. Evaluating before loading again continues to use the earlier approval.
+
+You can also approve with dates outside October 15, then load and evaluate. An approval whose dates do not cover the service date still needs manual review.
+
+## Details when you want them
+
+The main screen keeps the encounter and its actions in focus. Supporting information stays collapsed until you open it:
+
+- **Event history & delivery details** in Humata shows publications, acceptance, persistence, receipts, JSON, and safe retry/replay controls.
+- **Received event history** in Flow shows updates the receiver has saved. This feed updates automatically, independently of Flow’s loaded snapshot.
+- **How the connection works** below the apps explains the transport and displays progress for the latest update.
+- **How it works** at the top opens a short walkthrough.
+
+Kafka is the protocol used by the Node producer and receiver to communicate with Microsoft’s local Event Hubs emulator. There is no separate Kafka server. Only the receiver saves received events in PostgreSQL; Flow reads them from that database when you load an update. Replaying an older event does not replace a newer source decision.
 
 ## What runs underneath
 
 | Piece | Code |
 | --- | --- |
 | React/TypeScript screens | [web/src/main.tsx](../web/src/main.tsx) |
-| Responsive styles | [web/src/styles.css](../web/src/styles.css) |
+| Delivery feedback, optional progress, and evaluation | [web/src/LearningUI.tsx](../web/src/LearningUI.tsx), [web/src/learning.ts](../web/src/learning.ts) |
+| Responsive styles | [web/src/styles.css](../web/src/styles.css), [web/src/clarity.css](../web/src/clarity.css) |
+| Decision-specific source evidence | [src/demo-evidence.js](../src/demo-evidence.js) |
 | HTTP API and live updates | [src/web-server.js](../src/web-server.js) |
 | Scenario, publication, pull, and review operations | [src/demo-service.js](../src/demo-service.js) |
+| Fictional encounter catalog | [src/sample-encounters.js](../src/sample-encounters.js) |
 | Kafka producer and receiver | [src/transport.js](../src/transport.js) |
 | Database tables | [db/schema.sql](../db/schema.sql) |
 
@@ -97,7 +128,7 @@ make test             # Node, PostgreSQL, HTTP, and snapshot behavior
 make test-acceptance  # Real Kafka acceptance exercise
 ```
 
-The suite checks that acknowledgment alone does not create received history, new events cannot silently change a pulled snapshot, retries preserve event IDs, concurrent actions use distinct revisions, and new scenarios remain isolated.
+The suite checks that acknowledgment alone does not create received history, new events cannot silently change a loaded snapshot, guidance tracks the latest update, retries preserve event IDs, evidence matches its original reference, concurrent actions use distinct revisions, and new scenarios remain isolated.
 
 For frontend development with Node.js 24+ installed:
 
@@ -113,4 +144,4 @@ Vite serves the interface on port 5173 and proxies API requests to the running D
 
 `make down` stops the demo and preserves PostgreSQL data, including the browser scenario and snapshots. `make web` restores it later.
 
-Use **Start new scenario** for an ordinary fresh presentation. `make reset` deletes the demo's PostgreSQL volume and stops its containers; use that only when you intend to clear all saved demo data.
+Use **New encounter** for an ordinary fresh presentation. `make reset` deletes the demo's PostgreSQL volume and stops its containers; use that only when you intend to clear all saved demo data.

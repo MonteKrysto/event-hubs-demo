@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS ui_state (
     name TEXT PRIMARY KEY,
     scenario_id UUID NOT NULL REFERENCES ui_scenarios(id)
 );
+-- Keep existing scenarios and their immutable event history when adding context.
+ALTER TABLE ui_scenarios ADD COLUMN IF NOT EXISTS details JSONB NOT NULL DEFAULT '{}';
+CREATE UNIQUE INDEX IF NOT EXISTS ui_sample_encounter_key ON ui_scenarios ((details->>'sample_key')) WHERE details ? 'sample_key';
 CREATE TABLE IF NOT EXISTS ui_publications (
     event_id UUID PRIMARY KEY,
     scenario_id UUID NOT NULL REFERENCES ui_scenarios(id),

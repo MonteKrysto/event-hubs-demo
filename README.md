@@ -50,9 +50,12 @@ After setting `ACCEPT_EULA=Y` in `.env`, start the React/TypeScript interfaces a
 make web
 ```
 
-Open [both apps side by side](http://localhost:58080), [Humata](http://localhost:58080/humata), or [Flow](http://localhost:58080/flow). Use **Start new scenario** to create fresh synthetic identities without deleting prior history. Both routes share the active scenario, so they can be opened in separate browser windows.
+Open [both apps side by side](http://localhost:58080), [Humata](http://localhost:58080/humata), or [Flow](http://localhost:58080/flow). Use **New encounter** to create fresh synthetic identities without deleting prior history. Both routes share the active scenario, so they can be opened in separate browser windows.
 
-Publish a decision in Humata, watch it arrive in history, click **Pull latest data** in Flow, then **Review denial**. The incoming feed updates live; the account review uses only the most recent explicit pull. `make down` stops the web service along with the rest of the demo. Set `WEB_HOST_PORT` in `.env` to change the browser port.
+Choose any of the six authorization actions in Humata; all are visible on the encounter. For a first run, choose **Approve authorization**, wait for **Shared successfully**, then use **Load latest update** and **Evaluate denial** in Flow. Flow uses only the information you explicitly load. Event history, delivery details, and the connection diagram are available in expandable sections. `make down` stops the web service along with the rest of the demo. Set `WEB_HOST_PORT` in `.env` to change the browser port.
+
+Use **Add sample encounters** to add 48 fictional encounters and 126 authorization events through the Kafka pipeline. Select a case from the **Encounter** list; expand **Encounter details** for payer, procedure, provider, claim amount, and dates. The **Original claim denial** stays separate from the side-by-side **Humata’s latest status** and **Loaded in Flow** values. Each encounter retains its own loaded data and evaluation. Existing data is kept, and adding the sample set again does not duplicate it.
+
 
 The existing command-line workflow below remains available and uses its own saved scenario.
 
@@ -120,7 +123,7 @@ BROKER ACK: {"topic":"prior-authorization","partition":...,"offset":"..."}
 PASS: Kafka send + receive, PostgreSQL history, identity crosswalk, and Flow batch interpretation
 ```
 
-PostgreSQL contains four unique scenario events, five delivery receipts, and a Flow batch result. The approval's evidence reference accompanies the recommendation. All four states share one synthetic evidence fixture for simplicity; a real producer would reference the appropriate evidence for each state.
+PostgreSQL contains four unique scenario events, five delivery receipts, and a Flow batch result. The approval's evidence reference accompanies the recommendation. The CLI’s four states share one synthetic evidence fixture for simplicity. Browser decisions use individual synthetic records matching each decision; older browser events keep their original references and clearly label the reused fixture. A real producer would reference source-owned evidence for each state.
 
 Re-running `demo` reuses event IDs saved in PostgreSQL. Broker offsets advance and new delivery receipts appear, while the unique history stays at four events. Each successful run saves another Flow batch. A new receipt is required for every message sent in that run: old history alone cannot make the check pass if the receiver is stopped.
 

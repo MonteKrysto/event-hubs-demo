@@ -1,6 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { interpret, scenario, validate } from "./domain.js";
 import { publish } from "./transport.js";
+import { demoEvidence } from "./demo-evidence.js";
+import { readFileSync } from "node:fs";
+import { sampleEncounters, newEncounterDetails } from "./sample-encounters.js";
 
 export class DemoError extends Error {
   constructor(message, status = 400) {
@@ -15,7 +18,7 @@ export class DemoService {
     this.publisher = publisher;
   }
 
-  async createScenario(client) {
+  async createScenario(client, profile = {}, activate = true) {
     const id = randomUUID();
     const suffix = id.slice(0, 8).toUpperCase();
     const identity = {
@@ -30,17 +33,22 @@ export class DemoService {
       tenant_id: identity.tenant_id,
       account_id: identity.account_id,
       encounter_id: identity.encounter_id,
-      denial_reason: "missing_authorization",
-      service_date: "2026-10-15",
+      status: profile.claim_status || "denied",
+      denial_reason:
+        profile.claim_status && profile.claim_status !== "denied"
+          ? null
+          : profile.denial_reason || "missing_authorization",
+      service_date: profile.service_date || "2026-10-15",
     };
     const result = await client.query(
-      "INSERT INTO ui_scenarios (id,identity,claim) VALUES ($1,$2,$3) RETURNING *",
-      [id, identity, claim],
+      "INSERT INTO ui_scenarios (id,identity,claim,details) VALUES ($1,$2,$3,$4) RETURNING *",
+      [id, identity, claim, { ...newEncounterDetails(suffix), ...profile }],
     );
-    await client.query(
-      "INSERT INTO ui_state (name,scenario_id) VALUES ('active',$1) ON CONFLICT (name) DO UPDATE SET scenario_id=EXCLUDED.scenario_id",
-      [id],
-    );
+    if (activate)
+      await client.query(
+        "INSERT INTO ui_state (name,scenario_id) VALUES ('active',$1) ON CONFLICT (name) DO UPDATE SET scenario_id=EXCLUDED.scenario_id",
+        [id],
+      );
     return result.rows[0];
   }
 
@@ -65,6 +73,94 @@ export class DemoService {
     });
   }
 
+  async selectScenario(id) {
+    return this.history.transaction(async (client) => {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext('fiber-ui-active'))",
+      );
+      const selected = await this.getScenario(client, id);
+      await client.query(
+        "INSERT INTO ui_state (name,scenario_id) VALUES ('active',$1) ON CONFLICT (name) DO UPDATE SET scenario_id=EXCLUDED.scenario_id",
+        [id],
+      );
+      return selected;
+    });
+  }
+
+  async addSamples() {
+    if (!this.loadingSamples) {
+      this.loadingSamples = this.seedSamples().finally(() => {
+        this.loadingSamples = null;
+      });
+    }
+    return this.loadingSamples;
+  }
+
+  async seedSamples() {
+    await this.activeScenario();
+    // Create the case records without changing the encounter the user is viewing.
+    const records = await this.history.transaction(async (client) => {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext('fiber-ui-samples'))",
+      );
+      const records = [];
+      for (const sample of sampleEncounters()) {
+        const existing = await client.query(
+          "SELECT * FROM ui_scenarios WHERE details->>'sample_key'=$1",
+          [sample.sample_key],
+        );
+        const { statuses, ...details } = sample;
+        records.push({
+          sample,
+          record:
+            existing.rows[0] ||
+            (await this.createScenario(
+              client,
+              { ...details, sample_seed_complete: false },
+              false,
+            )),
+        });
+      }
+      return records;
+    });
+    let published = 0;
+    for (const { sample, record } of records) {
+      if (record.details.sample_seed_complete) continue;
+      const attempts = (
+        await this.history.pool.query(
+          "SELECT * FROM ui_publications WHERE scenario_id=$1 ORDER BY source_sequence",
+          [record.id],
+        )
+      ).rows;
+      for (const [index, status] of sample.statuses.entries()) {
+        const attempt = attempts[index];
+        if (attempt) {
+          if (attempt.event.status !== status)
+            throw new DemoError(
+              "This sample encounter was edited while being prepared. Its existing decisions have been kept.",
+              409,
+            );
+          if (attempt.publication_state !== "published")
+            await this.retry(record.id, attempt.event_id);
+          continue;
+        }
+        const occurredAt = new Date(`${sample.service_date}T12:00:00Z`);
+        occurredAt.setUTCDate(occurredAt.getUTCDate() - (10 - index));
+        await this.send(
+          record.id,
+          { status, ...sample.suggested_authorization },
+          { occurredAt: occurredAt.toISOString() },
+        );
+        published++;
+      }
+      await this.history.pool.query(
+        "UPDATE ui_scenarios SET details=jsonb_set(details,'{sample_seed_complete}','true') WHERE id=$1",
+        [record.id],
+      );
+    }
+    return { encounters: records.length, events_published: published };
+  }
+
   async getScenario(client, id, lock = false) {
     if (
       !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
@@ -81,7 +177,7 @@ export class DemoService {
     return result.rows[0];
   }
 
-  async send(id, input) {
+  async send(id, input, { occurredAt } = {}) {
     if (
       ![
         "not_required",
@@ -107,7 +203,7 @@ export class DemoService {
         source_account_id: current.identity.source_account_id,
         source_encounter_id: current.identity.source_encounter_id,
         source_sequence: Number(revision.rows[0].next),
-        occurred_at: new Date().toISOString(),
+        occurred_at: occurredAt || new Date().toISOString(),
         published_at: new Date().toISOString(),
         status: input.status,
       };
@@ -126,6 +222,7 @@ export class DemoService {
           valid_to: input.valid_to,
         });
       }
+      event.evidence = demoEvidence(event).reference;
       try {
         validate(event);
       } catch (error) {
@@ -205,6 +302,11 @@ export class DemoService {
   async review(id) {
     return this.history.transaction(async (client) => {
       const current = await this.getScenario(client, id);
+      if (current.claim.status && current.claim.status !== "denied")
+        throw new DemoError(
+          `This claim is ${current.claim.status}. There is no denial to evaluate.`,
+          409,
+        );
       const pull = (
         await client.query(
           "SELECT * FROM ui_pulls WHERE scenario_id=$1 ORDER BY id DESC LIMIT 1",
@@ -238,6 +340,61 @@ export class DemoService {
         [i.tenant_id, i.source_account_id, i.source_encounter_id],
       )
     ).rows;
+  }
+
+  async evidence(id, eventId) {
+    const current = await this.getScenario(this.history.pool, id);
+    if (
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+        eventId,
+      )
+    )
+      throw new DemoError("Invalid event identifier.");
+    const i = current.identity;
+    const result = await this.history.pool.query(
+      "SELECT payload FROM events WHERE event_id=$1 AND tenant_id=$2 AND source_account_id=$3 AND source_encounter_id=$4",
+      [eventId, i.tenant_id, i.source_account_id, i.source_encounter_id],
+    );
+    if (!result.rowCount)
+      throw new DemoError(
+        "The source event is not available in this scenario’s saved history.",
+        404,
+      );
+    const event = result.rows[0].payload;
+    const generated = demoEvidence(event);
+    if (
+      generated.reference.sha256 === event.evidence.sha256 &&
+      generated.reference.uri === event.evidence.uri
+    ) {
+      return {
+        content: generated.content,
+        kind: "decision-document",
+        status: event.status,
+        event_id: eventId,
+        sha256: generated.reference.sha256,
+      };
+    }
+    const legacy = readFileSync(
+      new URL("../fixtures/evidence.txt", import.meta.url),
+      "utf8",
+    );
+    const legacyHash = createHash("sha256").update(legacy).digest("hex");
+    if (
+      event.evidence.sha256 === legacyHash &&
+      event.evidence.uri === `humata://evidence/${legacyHash}`
+    ) {
+      return {
+        content: legacy,
+        kind: "legacy-fixture",
+        status: event.status,
+        event_id: eventId,
+        sha256: legacyHash,
+      };
+    }
+    throw new DemoError(
+      "This evidence reference cannot be resolved by the local demo.",
+      404,
+    );
   }
 
   async snapshot() {
@@ -283,6 +440,11 @@ export class DemoService {
       ).rows[0];
       return {
         scenario: current,
+        encounters: (
+          await client.query(
+            "SELECT id,number,identity,claim,details,created_at FROM ui_scenarios ORDER BY number DESC",
+          )
+        ).rows,
         publications,
         events,
         receipts,

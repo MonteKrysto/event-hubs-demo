@@ -2,16 +2,13 @@ import { StrictMode, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Activity,
   ArrowDownToLine,
   ArrowRight,
   ArrowUpRight,
-  BellRing,
   Check,
   CheckCheck,
   CheckCircle2,
   ChevronDown,
-  ChevronRight,
   CircleHelp,
   ClipboardCheck,
   Clock3,
@@ -19,7 +16,6 @@ import {
   FileCheck2,
   FileClock,
   FileText,
-  Fingerprint,
   GitBranch,
   HeartPulse,
   LayoutDashboard,
@@ -29,13 +25,21 @@ import {
   Search,
   Send,
   ShieldCheck,
-  Sparkles,
   Unplug,
   X,
   XCircle,
 } from "lucide-react";
 import type { AuthStatus, Publication, Snapshot } from "./types";
+import { latestEvent, learningState } from "./learning";
+import {
+  FlowFreshness,
+  JourneyProgress,
+  ActionFeedback,
+  ReviewExplanation,
+  AuthorizationComparison,
+} from "./LearningUI";
 import "./styles.css";
+import "./clarity.css";
 
 const labels: Record<AuthStatus, string> = {
   not_required: "Not required",
@@ -125,8 +129,16 @@ function App() {
   const [historyAvailable, setHistoryAvailable] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [dataNotice, setDataNotice] = useState("");
   const [guide, setGuide] = useState(false);
-  const [evidence, setEvidence] = useState<string | null>(null);
+  const [evidence, setEvidence] = useState<{
+    content: string;
+    kind: string;
+    status: string;
+    sha256: string;
+  } | null>(null);
+  const [deliveryDetails, setDeliveryDetails] = useState(false);
+  const [approvalDetails, setApprovalDetails] = useState(false);
   const [authNumber, setAuthNumber] = useState("AUTH-DEMO-2026");
   const [validFrom, setValidFrom] = useState("2026-10-01");
   const [validTo, setValidTo] = useState("2026-10-31");
@@ -136,7 +148,11 @@ function App() {
   useEffect(() => {
     const receive = (next: Snapshot) => {
       setState((current) =>
-        !current || current.instance_id !== next.instance_id || next.revision >= current.revision ? next : current,
+        !current ||
+        current.instance_id !== next.instance_id ||
+        next.revision >= current.revision
+          ? next
+          : current,
       );
       setHistoryAvailable(true);
     };
@@ -159,9 +175,12 @@ function App() {
   }, []);
   useEffect(() => {
     setExpanded(null);
-    setAuthNumber("AUTH-DEMO-2026");
-    setValidFrom("2026-10-01");
-    setValidTo("2026-10-31");
+    setDeliveryDetails(false);
+    setApprovalDetails(false);
+    const suggested = state?.scenario.details?.suggested_authorization;
+    setAuthNumber(suggested?.authorization_number || "AUTH-DEMO-2026");
+    setValidFrom(suggested?.valid_from || "2026-10-01");
+    setValidTo(suggested?.valid_to || "2026-10-31");
   }, [state?.scenario.id]);
   useEffect(() => {
     if (!guide && evidence === null) return;
@@ -208,10 +227,16 @@ function App() {
       await request(path, body);
       const next = await request<Snapshot>("/api/state");
       setState((current) =>
-        !current || current.instance_id !== next.instance_id || next.revision >= current.revision ? next : current,
+        !current ||
+        current.instance_id !== next.instance_id ||
+        next.revision >= current.revision
+          ? next
+          : current,
       );
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
       setBusy("");
     }
@@ -228,8 +253,17 @@ function App() {
   const showEvidence = async () => {
     modalTrigger.current = document.activeElement as HTMLElement | null;
     try {
+      const event = latestEvent(state?.pull?.events || []);
+      if (!state || !event) return;
       setEvidence(
-        (await request<{ content: string }>("/api/evidence")).content,
+        await request<{
+          content: string;
+          kind: string;
+          status: string;
+          sha256: string;
+        }>(
+          `/api/scenarios/${state.scenario.id}/events/${event.event_id}/evidence`,
+        ),
       );
     } catch (e) {
       setError((e as Error).message);
@@ -237,9 +271,20 @@ function App() {
   };
 
   const scenario = state?.scenario;
+  const claimStatus = scenario?.claim.status || "denied";
+  const hasDenial = claimStatus === "denied";
+  const denialReason =
+    (
+      {
+        missing_authorization: "Missing authorization",
+        service_not_covered: "Service not covered",
+        eligibility: "Coverage eligibility issue",
+      } as Record<string, string>
+    )[scenario?.claim.denial_reason || ""] || "Other denial reason";
   const currentEvent = state?.publications[0]?.event;
   const pulledEvents = state?.pull?.events || [];
-  const pulled = pulledEvents.at(-1)?.payload;
+  const pulled = latestEvent(pulledEvents);
+  const journey = state ? learningState(state) : null;
   const newEvents = state
     ? state.events.filter(
         (row) => !pulledEvents.some((old) => old.event_id === row.event_id),
@@ -247,6 +292,22 @@ function App() {
     : 0;
   const online = live && historyAvailable;
   const locked = !!busy || !online || !state;
+  const approvalInvalid =
+    !authNumber.trim() || !validFrom || !validTo || validFrom > validTo;
+  const showArea = (id: string, app: string) => {
+    if (view !== "overview" && view !== app) navigate(app);
+    window.setTimeout(
+      () =>
+        document.getElementById(id)?.scrollIntoView({
+          block: "start",
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+            .matches
+            ? "auto"
+            : "smooth",
+        }),
+      0,
+    );
+  };
 
   const activity = (publication: Publication) => {
     const stored = state?.events.find(
@@ -288,12 +349,12 @@ function App() {
             className={`delivery-label ${stored ? "saved" : failed ? "failed" : ""}`}
           >
             {stored
-              ? "Saved to history"
+              ? "Saved in shared history"
               : failed
                 ? "Delivery unconfirmed"
                 : pending
                   ? "Sending…"
-                  : "Broker acknowledged"}
+                  : "Accepted by Event Hubs"}
             <ChevronDown size={13} className={expandedHere ? "rotated" : ""} />
           </span>
         </button>
@@ -309,11 +370,11 @@ function App() {
                 ) : (
                   <Clock3 size={13} />
                 )}{" "}
-                Broker acknowledged
+                Accepted by Event Hubs
               </span>
               <span>
                 {stored ? <CheckCircle2 size={13} /> : <Clock3 size={13} />}{" "}
-                Saved to history
+                Saved in shared history
               </span>
             </div>
             <dl>
@@ -408,21 +469,6 @@ function App() {
             <ArrowUpRight size={13} className="nav-end" />
           </button>
         </nav>
-        <div className="sidebar-note">
-          <span className="eyebrow">THE FIRST CONNECTION</span>
-          <p>
-            One decision.
-            <br />
-            Shared context.
-            <br />
-            <strong>A better next step.</strong>
-          </p>
-          <div className="mini-path">
-            <span>Humata</span>
-            <ArrowRight size={13} />
-            <span>Flow</span>
-          </div>
-        </div>
         <div className="sidebar-bottom">
           <button
             className="guide-button"
@@ -446,11 +492,20 @@ function App() {
       <main>
         <header className="topbar">
           <div className="breadcrumb">
-            Workspace
-            <ChevronRight size={13} />
-            <strong>Prior authorization</strong>
+            <strong>Authorization demo</strong>
           </div>
           <div className="topbar-right">
+            <button
+              className="topbar-guide"
+              onClick={() => {
+                modalTrigger.current =
+                  document.activeElement as HTMLElement | null;
+                setGuide(true);
+              }}
+            >
+              <CircleHelp size={16} />
+              How it works
+            </button>
             <span className="synthetic-label">
               <ShieldCheck size={13} />
               Synthetic data only
@@ -467,43 +522,164 @@ function App() {
               <div className="eyebrow">HUMATA → FLOW</div>
               <h1>
                 {view === "humata"
-                  ? "Where a decision begins."
+                  ? "Humata authorization"
                   : view === "flow"
-                    ? "Turn shared context into action."
-                    : "From decision to action."}
+                    ? "Flow claim review"
+                    : "Prior authorization demo"}
               </h1>
               <p>
                 {view === "humata"
-                  ? "Publish an authorization update and follow its journey."
+                  ? "Choose what happens with this encounter’s authorization."
                   : view === "flow"
-                    ? "Bring authorization history into a better-informed denial review."
-                    : "Follow an authorization decision across two applications, one event at a time."}
+                    ? "Load authorization history and compare it with this claim’s original status."
+                    : "Change the authorization in Humata. Load it in Flow to see how it relates to the claim."}
               </p>
             </div>
-            <button
-              className="button secondary new-scenario"
-              disabled={locked}
-              onClick={() => act("new", "/api/scenarios")}
-            >
-              <RefreshCw size={15} className={busy === "new" ? "spin" : ""} />
-              Start new scenario
-            </button>
-          </div>
-          <div className="scenario-strip">
-            <div>
-              <Fingerprint size={15} />
-              <strong>
-                Scenario{" "}
-                {scenario ? String(scenario.number).padStart(3, "0") : "—"}
-              </strong>
-              <span className="separator">/</span>
-              <span>Synthetic outpatient encounter</span>
+            <div className="new-scenario-control">
+              {" "}
+              <button
+                className="button secondary new-scenario"
+                disabled={locked}
+                onClick={() => act("new", "/api/scenarios")}
+              >
+                <RefreshCw size={15} className={busy === "new" ? "spin" : ""} />
+                New encounter
+              </button>
+              <p>New encounter in both apps. Previous history is kept.</p>
             </div>
-            <span className="mono">
-              {scenario?.identity.source_encounter_id ||
-                "Connecting to the demo…"}
-            </span>
           </div>
+          {state && (
+            <section
+              className="encounter-context"
+              aria-label="Selected encounter"
+            >
+              <div className="encounter-picker">
+                <label>
+                  Encounter <span>({state.encounters.length})</span>
+                  <select
+                    value={state.scenario.id}
+                    disabled={locked}
+                    onChange={(event) =>
+                      act(
+                        "select",
+                        `/api/scenarios/${event.target.value}/select`,
+                      )
+                    }
+                  >
+                    {state.encounters.map((encounter) => (
+                      <option key={encounter.id} value={encounter.id}>
+                        {encounter.details?.patient_name ||
+                          `Previous encounter ${encounter.number}`}{" "}
+                        · {encounter.details?.procedure || "Outpatient visit"} ·{" "}
+                        {date(encounter.claim.service_date)}
+                        {" · "}
+                        {encounter.claim.status || "denied"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="button secondary"
+                  disabled={locked}
+                  onClick={async () => {
+                    setDataNotice("");
+                    if (await act("samples", "/api/samples"))
+                      setDataNotice(
+                        "Sample encounters are available. Choose an encounter from the list.",
+                      );
+                  }}
+                >
+                  <Database
+                    size={16}
+                    className={busy === "samples" ? "spin" : ""}
+                  />
+                  {busy === "samples"
+                    ? "Preparing sample encounters…"
+                    : "Add sample encounters"}
+                </button>
+              </div>
+              <div className="encounter-context-line">
+                <strong>
+                  {scenario?.details?.patient_name || "Previous demo encounter"}
+                </strong>
+                <span>
+                  {scenario?.details?.procedure ||
+                    "No additional encounter details saved"}
+                  {scenario?.details?.payer
+                    ? ` · ${scenario.details.payer}`
+                    : ""}
+                </span>
+              </div>
+              {scenario?.details?.patient_id && (
+                <details className="encounter-more">
+                  <summary>Encounter details</summary>
+                  <dl>
+                    <div>
+                      <dt>Patient ID (synthetic)</dt>
+                      <dd>{scenario.details.patient_id}</dd>
+                    </div>
+                    <div>
+                      <dt>Provider</dt>
+                      <dd>{scenario.details.provider}</dd>
+                    </div>
+                    <div>
+                      <dt>Procedure ID (demo)</dt>
+                      <dd>{scenario.details.procedure_code}</dd>
+                    </div>
+                    <div>
+                      <dt>Claim amount</dt>
+                      <dd>
+                        {new Intl.NumberFormat("en-US", {
+                          style: "currency",
+                          currency: "USD",
+                        }).format(scenario.details.billed_amount || 0)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>
+                        {hasDenial
+                          ? "Original denial date"
+                          : "Original claim date"}
+                      </dt>
+                      <dd>
+                        {scenario.details.denial_date ||
+                        scenario.details.claim_date
+                          ? date(
+                              (scenario.details.denial_date ||
+                                scenario.details.claim_date)!,
+                            )
+                          : "Not recorded"}
+                      </dd>
+                    </div>
+                    {claimStatus === "paid" && (
+                      <div>
+                        <dt>Paid amount (synthetic)</dt>
+                        <dd>
+                          {new Intl.NumberFormat("en-US", {
+                            style: "currency",
+                            currency: "USD",
+                          }).format(scenario.details.paid_amount || 0)}
+                        </dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt>Service date</dt>
+                      <dd>{date(scenario.claim.service_date)}</dd>
+                    </div>
+                  </dl>
+                  <p>
+                    All people, payers, providers, and amounts in this demo are
+                    fictional.
+                  </p>
+                </details>
+              )}
+              {dataNotice && (
+                <p className="data-notice" role="status">
+                  {dataNotice}
+                </p>
+              )}
+            </section>
+          )}
           {!online && (
             <div className="notice warning" role="status">
               <Unplug size={17} />
@@ -521,61 +697,6 @@ function App() {
               </button>
             </div>
           )}
-          <div className="pipeline" aria-label="Integration progress">
-            {[
-              {
-                title: "Humata",
-                text: `${state?.publications.length || 0} updates created`,
-                icon: HeartPulse,
-                done: !!state?.publications.length,
-              },
-              {
-                title: "Event Hubs",
-                text: state?.publications.some((p) => p.acknowledgment)
-                  ? "Delivery acknowledged"
-                  : "Awaiting first event",
-                icon: Radio,
-                done: !!state?.publications.some((p) => p.acknowledgment),
-              },
-              {
-                title: "Event history",
-                text: `${state?.events.length || 0} events saved`,
-                icon: Database,
-                done: !!state?.events.length,
-              },
-              {
-                title: "Flow pull",
-                text: state?.pull
-                  ? `${pulledEvents.length} events retrieved`
-                  : "Waiting for your pull",
-                icon: ArrowDownToLine,
-                done: !!state?.pull,
-              },
-              {
-                title: "Denial review",
-                text: state?.review ? "Review complete" : "Ready when you are",
-                icon: ClipboardCheck,
-                done: !!state?.review,
-              },
-            ].map((stage, index) => (
-              <div
-                className={`pipeline-stage ${stage.done ? "done" : ""}`}
-                key={stage.title}
-              >
-                <div className="pipeline-icon">
-                  <stage.icon size={17} />
-                </div>
-                <div>
-                  <strong>{stage.title}</strong>
-                  <span>{stage.text}</span>
-                </div>
-                {index < 4 && (
-                  <ChevronRight size={15} className="pipeline-arrow" />
-                )}
-              </div>
-            ))}
-          </div>
-
           <div
             className={`app-grid ${view === "overview" ? "" : "single-app"}`}
           >
@@ -592,16 +713,16 @@ function App() {
                     <h2>Humata</h2>
                     <p>Authorization workspace</p>
                   </div>
-                  <span className="role-label">EVENT PRODUCER</span>
                 </div>
-                <div className="card encounter-card">
+                <div className="card encounter-card" id="humata-decision">
                   <div className="card-title">
-                    <h3>Prior authorization</h3>
+                    <h3>Humata authorization</h3>
                     <Status status={currentEvent?.status} />
                   </div>
                   <p className="card-description">
-                    Record a decision for this encounter. Each action publishes
-                    a new event.
+                    {currentEvent?.status === "required"
+                      ? "This encounter needs authorization. An approval has not been granted."
+                      : "Choose an action to update this encounter’s authorization."}
                   </p>
                   <div className="encounter-info">
                     <div>
@@ -617,60 +738,142 @@ function App() {
                       </strong>
                     </div>
                   </div>
-                  <div className="section-caption">
-                    UPDATE AUTHORIZATION STATE
-                  </div>
-                  <div className="action-grid">
+                  <div
+                    className="authorization-actions"
+                    role="group"
+                    aria-label="Authorization actions"
+                  >
                     <button
+                      className="authorization-action required"
                       disabled={locked}
                       onClick={() => send("required")}
-                      className="action-button"
                     >
-                      <ClipboardCheck size={17} />
-                      <span>Authorization required</span>
-                      {busy === "required" && (
-                        <LoaderCircle size={14} className="spin" />
-                      )}
+                      <span className="authorization-action-title">
+                        {busy === "required" ? (
+                          <LoaderCircle size={18} className="spin" />
+                        ) : (
+                          <ClipboardCheck size={18} />
+                        )}
+                        <strong>Require authorization</strong>
+                      </span>
+                      <span className="authorization-action-description">
+                        This visit needs prior authorization.
+                      </span>
                     </button>
                     <button
-                      disabled={locked}
-                      onClick={() => send("attempted")}
-                      className="action-button"
-                    >
-                      <Search size={17} />
-                      <span>Attempt authorization</span>
-                      {busy === "attempted" && (
-                        <LoaderCircle size={14} className="spin" />
-                      )}
-                    </button>
-                    <button
-                      disabled={locked}
-                      onClick={() => send("submitted")}
-                      className="action-button"
-                    >
-                      <Send size={17} />
-                      <span>Submit request</span>
-                      {busy === "submitted" && (
-                        <LoaderCircle size={14} className="spin" />
-                      )}
-                    </button>
-                    <button
+                      className="authorization-action not_required"
                       disabled={locked}
                       onClick={() => send("not_required")}
-                      className="action-button"
                     >
-                      <ShieldCheck size={17} />
-                      <span>Authorization not required</span>
-                      {busy === "not_required" && (
-                        <LoaderCircle size={14} className="spin" />
-                      )}
+                      <span className="authorization-action-title">
+                        {busy === "not_required" ? (
+                          <LoaderCircle size={18} className="spin" />
+                        ) : (
+                          <ShieldCheck size={18} />
+                        )}
+                        <strong>No authorization needed</strong>
+                      </span>
+                      <span className="authorization-action-description">
+                        This visit does not need prior authorization.
+                      </span>
+                    </button>
+                    <button
+                      className="authorization-action attempted"
+                      disabled={locked}
+                      onClick={() => send("attempted")}
+                    >
+                      <span className="authorization-action-title">
+                        {busy === "attempted" ? (
+                          <LoaderCircle size={18} className="spin" />
+                        ) : (
+                          <Search size={18} />
+                        )}
+                        <strong>Start authorization</strong>
+                      </span>
+                      <span className="authorization-action-description">
+                        Begin an attempt to obtain authorization.
+                      </span>
+                    </button>
+                    <button
+                      className="authorization-action submitted"
+                      disabled={locked}
+                      onClick={() => send("submitted")}
+                    >
+                      <span className="authorization-action-title">
+                        {busy === "submitted" ? (
+                          <LoaderCircle size={18} className="spin" />
+                        ) : (
+                          <Send size={18} />
+                        )}
+                        <strong>Submit authorization request</strong>
+                      </span>
+                      <span className="authorization-action-description">
+                        The request has been sent for a decision.
+                      </span>
+                    </button>
+                    <button
+                      className="authorization-action approved"
+                      disabled={locked || approvalInvalid}
+                      onClick={() => send("approved")}
+                    >
+                      <span className="authorization-action-title">
+                        {busy === "approved" ? (
+                          <LoaderCircle size={18} className="spin" />
+                        ) : (
+                          <CheckCircle2 size={18} />
+                        )}
+                        <strong>Approve authorization</strong>
+                      </span>
+                      <span className="authorization-action-description">
+                        Authorization has been granted.
+                      </span>
+                    </button>
+                    <button
+                      className="authorization-action denied"
+                      disabled={locked}
+                      onClick={() => send("denied")}
+                    >
+                      <span className="authorization-action-title">
+                        {busy === "denied" ? (
+                          <LoaderCircle size={18} className="spin" />
+                        ) : (
+                          <XCircle size={18} />
+                        )}
+                        <strong>Deny authorization</strong>
+                      </span>
+                      <span className="authorization-action-description">
+                        Authorization has not been granted.
+                      </span>
                     </button>
                   </div>
-                  <div className="approval-form">
-                    <div className="form-caption">
-                      <FileCheck2 size={15} />
-                      Approval details<span>Used when approving</span>
-                    </div>
+                  <p className="simulation-note">
+                    Demo actions: each button saves and shares a simulated
+                    authorization update.
+                  </p>
+                  <ActionFeedback
+                    state={state}
+                    busy={busy}
+                    onDetails={() => setDeliveryDetails(true)}
+                  />{" "}
+                  <details
+                    className="approval-form"
+                    id="approval-details"
+                    open={approvalDetails}
+                    onToggle={(event) =>
+                      setApprovalDetails(event.currentTarget.open)
+                    }
+                  >
+                    <summary className="form-caption">
+                      <FileCheck2 size={16} />
+                      Approval number & dates
+                      {approvalInvalid && <span>Needs attention</span>}
+                      <ChevronDown size={14} />
+                    </summary>
+                    <p className="form-helper">
+                      Approval dates are compared with the service date:{" "}
+                      {scenario ? date(scenario.claim.service_date) : "—"}. They
+                      do not need to cover today.
+                    </p>
                     <label className="full-field">
                       Authorization number
                       <input
@@ -700,65 +903,47 @@ function App() {
                         />
                       </label>
                     </div>
-                    <div className="decision-buttons">
-                      <button
-                        className="button approve"
-                        disabled={
-                          locked ||
-                          !authNumber.trim() ||
-                          !validFrom ||
-                          !validTo ||
-                          validFrom > validTo
-                        }
-                        onClick={() => send("approved")}
-                      >
-                        {busy === "approved" ? (
-                          <LoaderCircle size={16} className="spin" />
-                        ) : (
-                          <CheckCircle2 size={16} />
-                        )}
-                        Approve authorization
-                      </button>
-                      <button
-                        className="button deny"
-                        disabled={locked}
-                        onClick={() => send("denied")}
-                      >
-                        {busy === "denied" ? (
-                          <LoaderCircle size={16} className="spin" />
-                        ) : (
-                          <XCircle size={16} />
-                        )}
-                        Deny
-                      </button>
-                    </div>
-                  </div>
-                  <div className="card-footnote">
-                    <GitBranch size={13} />
-                    Publishes to Event Hubs using the Kafka protocol.
-                  </div>
+                    {approvalInvalid && (
+                      <p className="field-error">
+                        Enter an authorization number and valid coverage dates.
+                        The end date must be on or after the start date.
+                      </p>
+                    )}
+                  </details>
+                  {journey?.saved && !journey.inFlow && (
+                    <button
+                      className="button continue-flow"
+                      onClick={() => showArea("flow-data", "flow")}
+                    >
+                      Continue in Flow
+                      <ArrowRight size={16} />
+                    </button>
+                  )}
                 </div>
-                <div className="card activity-card">
-                  <div className="card-title">
-                    <h3>
-                      <Activity size={16} />
-                      Publication activity
-                    </h3>
-                    <span className="count-label">
-                      {state?.publications.length || 0} updates
-                    </span>
-                  </div>
+                <details
+                  className="card activity-card technical-details"
+                  id="publication-activity"
+                  open={deliveryDetails}
+                  onToggle={(event) =>
+                    setDeliveryDetails(event.currentTarget.open)
+                  }
+                >
+                  <summary>
+                    Event history & delivery details
+                    <span>{state?.publications.length || 0} updates</span>
+                    <ChevronDown size={15} />
+                  </summary>{" "}
                   {state?.publications.length ? (
                     <div className="timeline" aria-live="polite">
                       {state.publications.map(activity)}
                     </div>
                   ) : (
                     <Empty title="Your first event starts here">
-                      Choose an authorization action above to follow its
-                      delivery.
+                      Choose any authorization action. Its event will appear
+                      here.
                     </Empty>
                   )}
-                </div>
+                </details>
               </section>
             )}
 
@@ -772,25 +957,43 @@ function App() {
                     <h2>Flow</h2>
                     <p>Account decision workspace</p>
                   </div>
-                  <span className="role-label">HISTORY CONSUMER</span>
                 </div>
-                <div className="card claim-card">
+                <div className="card flow-workspace" id="flow-data">
                   <div className="card-title">
-                    <h3>Claim denial</h3>
-                    <span className="status denied">
+                    <h3>
+                      {hasDenial
+                        ? "Original claim denial"
+                        : "Original claim status"}
+                    </h3>
+                    <span className={`status ${claimStatus}`}>
                       <span />
-                      Needs review
+                      Original status: {claimStatus}
                     </span>
                   </div>
                   <div className="denial-reason">
-                    <div className="denial-icon">
-                      <FileClock size={22} />
+                    <div className={`denial-icon ${claimStatus}`}>
+                      {claimStatus === "paid" ? (
+                        <CheckCircle2 size={22} />
+                      ) : (
+                        <FileClock size={22} />
+                      )}
                     </div>
                     <div>
-                      <strong>Missing authorization</strong>
+                      <strong>
+                        {hasDenial
+                          ? denialReason
+                          : claimStatus === "paid"
+                            ? "Claim paid"
+                            : "Awaiting payer decision"}
+                      </strong>
                       <p>
-                        This claim was denied because authorization was not on
-                        file.
+                        {hasDenial
+                          ? "This is the claim’s original denial reason."
+                          : claimStatus === "paid"
+                            ? "This example claim has already been paid."
+                            : "This example claim is still awaiting a payment decision."}{" "}
+                        Updating an authorization does not change the claim
+                        status.
                       </p>
                     </div>
                   </div>
@@ -806,159 +1009,121 @@ function App() {
                       </strong>
                     </div>
                   </div>
-                </div>
-                <div className="card flow-data-card">
-                  <div className="card-title">
-                    <h3>Authorization information</h3>
-                    <span
-                      className={`sync-label ${newEvents && state?.pull ? "outdated" : ""}`}
-                    >
-                      {!state?.pull
-                        ? "Not pulled"
-                        : newEvents
-                          ? "New history available"
-                          : "Up to date"}
-                    </span>
-                  </div>
-                  <p className="card-description">
-                    Pull saved history into Flow, then use it to review the
-                    denial.
-                  </p>
-                  <button
-                    className="button pull"
-                    disabled={locked}
-                    onClick={() =>
-                      act("pull", `/api/scenarios/${scenario!.id}/pull`)
-                    }
-                  >
-                    {busy === "pull" ? (
-                      <LoaderCircle size={16} className="spin" />
-                    ) : (
-                      <ArrowDownToLine size={16} />
-                    )}
-                    Pull latest data
-                    {newEvents > 0 && (
-                      <span className="button-counter">{newEvents}</span>
-                    )}
-                    <ArrowRight size={16} className="button-end" />
-                  </button>
-                  {pulled ? (
-                    <div className="pulled-authorization">
-                      <div className="pulled-heading">
-                        <span>Latest authorization</span>
-                        <Status status={pulled.status} />
-                      </div>
-                      {pulled.authorization_number && (
-                        <div className="auth-number">
-                          {pulled.authorization_number}
-                        </div>
-                      )}
-                      {pulled.valid_from && pulled.valid_to && (
-                        <p className="coverage">
-                          {date(pulled.valid_from)} – {date(pulled.valid_to)}
-                        </p>
-                      )}
-                      <div className="mapping-note">
-                        <CheckCheck size={14} />
-                        Matched to this account and encounter
-                      </div>
-                      <button className="text-button" onClick={showEvidence}>
-                        <FileText size={14} />
-                        View demo evidence
-                        <ArrowUpRight size={13} />
-                      </button>
+                  <div className="flow-information">
+                    <div className="card-title">
+                      <h3>Authorization status</h3>
+                      <span
+                        className={`sync-label ${newEvents && state?.pull ? "outdated" : ""}`}
+                      >
+                        {!state?.pull
+                          ? "Not loaded"
+                          : journey?.inFlow
+                            ? "Latest update loaded"
+                            : journey?.latest
+                              ? "Earlier data loaded"
+                              : "No authorization loaded"}
+                      </span>
                     </div>
-                  ) : (
-                    <Empty
-                      icon={FileClock}
-                      title={
-                        state?.pull
-                          ? "No authorization history in this pull"
-                          : "No authorization data pulled yet"
-                      }
-                    >
-                      {state?.pull
-                        ? "Publish an update in Humata, wait for it to arrive, then pull again."
-                        : "Events can arrive in history while Flow waits for your next pull."}
-                    </Empty>
-                  )}
-                  <div className="pull-footer">
-                    <Clock3 size={13} />
-                    {state?.pull
-                      ? `Last pulled ${time(state.pull.pulled_at)} · ${pulledEvents.length} events`
-                      : "Daily-style batch · triggered manually for this demo"}
-                  </div>
-                  {newEvents > 0 && state?.pull && (
-                    <div className="new-history">
-                      <BellRing size={14} />
-                      {newEvents} new{" "}
-                      {newEvents === 1 ? "event is" : "events are"} in history.
-                      Pull again to update this account.
-                    </div>
-                  )}
-                  <div className="review-section">
-                    <button
-                      className="button review"
-                      disabled={locked || !state?.pull}
-                      onClick={() =>
-                        act("review", `/api/scenarios/${scenario!.id}/review`)
-                      }
-                    >
-                      {busy === "review" ? (
-                        <LoaderCircle size={16} className="spin" />
-                      ) : (
-                        <ClipboardCheck size={16} />
-                      )}
-                      Review denial
-                    </button>
-                    {!state?.pull && <span>Pull data to enable review</span>}
-                  </div>
-                  {state?.review && (
-                    <div
-                      className={`review-result ${state.review.decision.recommendation === "dispute_candidate" ? "candidate" : "manual"}`}
-                      aria-live="polite"
-                    >
-                      <div className="result-icon">
-                        {state.review.decision.recommendation ===
-                        "dispute_candidate" ? (
-                          <Sparkles size={19} />
+                    <p className="card-description">
+                      Flow uses the information you load here. New Humata
+                      decisions do not change it automatically.
+                    </p>
+                    {state && <AuthorizationComparison state={state} />}
+                    {state && <FlowFreshness state={state} />}
+                    <div className="flow-actions">
+                      {" "}
+                      <button
+                        className="button pull"
+                        disabled={locked}
+                        onClick={() =>
+                          act("pull", `/api/scenarios/${scenario!.id}/pull`)
+                        }
+                      >
+                        {busy === "pull" ? (
+                          <LoaderCircle size={16} className="spin" />
                         ) : (
-                          <Search size={19} />
+                          <ArrowDownToLine size={16} />
                         )}
+                        Load latest update
+                        {newEvents > 0 && (
+                          <span className="button-counter">{newEvents}</span>
+                        )}
+                        <ArrowRight size={16} className="button-end" />
+                      </button>
+                      {hasDenial && (
+                        <button
+                          className="button review"
+                          disabled={locked || !state?.pull}
+                          onClick={() =>
+                            act(
+                              "review",
+                              `/api/scenarios/${scenario!.id}/review`,
+                            )
+                          }
+                        >
+                          {busy === "review" ? (
+                            <LoaderCircle size={16} className="spin" />
+                          ) : (
+                            <ClipboardCheck size={16} />
+                          )}
+                          Evaluate denial
+                        </button>
+                      )}
+                    </div>{" "}
+                    {!hasDenial && (
+                      <div className="claim-outcome-note" role="status">
+                        <CheckCircle2 size={17} />
+                        <span>
+                          {claimStatus === "paid"
+                            ? "This claim is paid. There is no denial to evaluate."
+                            : "This claim is pending. No denial has been issued."}{" "}
+                          You can still load its authorization history.
+                        </span>
                       </div>
-                      <div>
-                        <span className="eyebrow">REVIEW RECOMMENDATION</span>
-                        <h4>
-                          {state.review.decision.recommendation ===
-                          "dispute_candidate"
-                            ? "Candidate for dispute review"
-                            : "Manual review needed"}
-                        </h4>
-                        <p>{state.review.decision.reason}</p>
-                        <small>
-                          Based on the last pull ·{" "}
-                          {time(state.review.reviewed_at)}
-                          <br />A person reviews the evidence before taking
-                          action.
-                        </small>
+                    )}
+                    {pulled && (
+                      <div className="pulled-authorization">
+                        {pulled.authorization_number && (
+                          <div className="auth-number">
+                            {pulled.authorization_number}
+                          </div>
+                        )}
+                        {pulled.valid_from && pulled.valid_to && (
+                          <p className="coverage">
+                            {date(pulled.valid_from)} – {date(pulled.valid_to)}
+                          </p>
+                        )}
+                        <div className="mapping-note">
+                          <CheckCheck size={14} />
+                          Matched to this encounter
+                        </div>
+                        <button className="text-button" onClick={showEvidence}>
+                          <FileText size={14} />
+                          View evidence for this decision
+                          <ArrowUpRight size={13} />
+                        </button>
                       </div>
+                    )}
+                    <div className="pull-footer">
+                      <Clock3 size={13} />
+                      {state?.pull
+                        ? `Loaded ${new Date(state.pull.pulled_at).toLocaleString()} · ${pulledEvents.length} saved events`
+                        : hasDenial
+                          ? "Load an update to enable evaluation"
+                          : "Load an update to inspect authorization history"}
                     </div>
-                  )}
-                </div>
-                <div className="card incoming-card">
-                  <div className="card-title">
-                    <h3>
-                      <Radio size={16} />
-                      Incoming event activity
-                    </h3>
-                    <span className="small-live">
-                      <span />
-                      {online ? "Live" : "Paused"}
-                    </span>
+                    {state && <ReviewExplanation state={state} />}
                   </div>
+                </div>
+                <details className="card incoming-card shared-history technical-details">
+                  <summary>
+                    Received event history
+                    <span>{state?.events.length || 0} events</span>
+                    <ChevronDown size={15} />
+                  </summary>{" "}
                   <p className="card-description">
-                    Platform history updates here. Flow's account changes when
-                    you pull.
+                    The receiver saves events here automatically. Seeing an
+                    event here does not mean Flow has loaded it.
                   </p>
                   {state?.events.length ? (
                     <div className="incoming-list" aria-live="polite">
@@ -970,7 +1135,7 @@ function App() {
                           <div>
                             <strong>{eventTitles[row.payload.status]}</strong>
                             <span>
-                              Saved to history · {time(row.received_at)}
+                              Saved in shared history · {time(row.received_at)}
                             </span>
                           </div>
                           <span className="incoming-sequence">
@@ -988,10 +1153,22 @@ function App() {
                       here automatically.
                     </Empty>
                   )}
-                </div>
+                </details>
               </section>
             )}
           </div>
+          <details className="connection-details technical-details">
+            <summary>
+              How the connection works
+              <ChevronDown size={15} />
+            </summary>
+            <p>
+              Humata sends an event to the local Event Hubs emulator using the
+              Kafka protocol. A separate receiver saves it in PostgreSQL. Flow
+              reads that saved history when you load an update.
+            </p>
+            <JourneyProgress state={state} />
+          </details>
           <footer className="page-footer">
             <span>
               <ShieldCheck size={13} />A local learning environment. All
@@ -1050,36 +1227,39 @@ function App() {
                   <li>
                     <strong>Publish a decision in Humata.</strong>
                     <span>
-                      Try Required, Submitted, then Approved. Every action
-                      creates a new event.
+                      All six authorization actions are together on the
+                      encounter. Choose any action; every click shares a new
+                      update.
                     </span>
                   </li>
                   <li>
                     <strong>Watch the delivery.</strong>
                     <span>
-                      The broker acknowledges the event. The receiver saves it
-                      into PostgreSQL history.
+                      Event Hubs accepts the event. A separate receiver saves it
+                      in shared history. Acceptance and saving are different
+                      steps.
                     </span>
                   </li>
                   <li>
-                    <strong>Pull the history into Flow.</strong>
+                    <strong>Load the history into Flow.</strong>
                     <span>
-                      Incoming activity is live; this pull represents Flow's
-                      daily batch.
+                      Shared history updates automatically. Flow’s load is
+                      explicit and represents the daily batch.
                     </span>
                   </li>
                   <li>
-                    <strong>Review the claim denial.</strong>
+                    <strong>Evaluate the claim denial.</strong>
                     <span>
-                      Flow uses only the last pulled data to look for an
-                      approval covering the service date.
+                      Flow uses only its last loaded snapshot. The result
+                      explains each check and leaves the next action to a
+                      person.
                     </span>
                   </li>
                 </ol>
                 <div className="guide-tip">
-                  Try denying authorization after a pull. The new event appears
-                  immediately, but Flow keeps its old snapshot until you pull
-                  again.
+                  Try denying authorization after loading an approval. Shared
+                  history updates automatically, but Flow keeps its earlier
+                  information until you load again.
                 </div>
                 <button
                   className="button approve"
@@ -1092,16 +1272,23 @@ function App() {
             ) : (
               <>
                 <div className="eyebrow">SOURCE-OWNED EVIDENCE · SYNTHETIC</div>
-                <h2 id="modal-title">Supporting approval document</h2>
+                <h2 id="modal-title">
+                  {evidence?.kind === "legacy-fixture"
+                    ? "Reused sample document"
+                    : evidence?.status === "approved"
+                      ? "Approval source record"
+                      : "Authorization decision record"}
+                </h2>
                 <p>
-                  This local fixture represents the evidence reference supplied
-                  by Humata.
+                  {evidence?.kind === "legacy-fixture"
+                    ? "This older event references the original shared approval fixture. Its text may not describe this event’s decision. It is shown unchanged to preserve the original reference."
+                    : "This synthetic document matches the selected decision and its evidence reference. It has no clinical or payer authority."}
                 </p>
-                <pre className="evidence-content">{evidence}</pre>
+                <pre className="evidence-content">{evidence?.content}</pre>
                 <p className="evidence-note">
-                  The production integration would retrieve the document from
-                  Humata using the event's evidence reference and verify its
-                  content hash.
+                  The local demo resolved the event’s original evidence
+                  reference and checked the document’s content hash. A person
+                  still reviews the content before taking action.
                 </p>
               </>
             )}

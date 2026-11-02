@@ -42,7 +42,7 @@ export type Publication = {
   updated_at: string;
 };
 export type Decision = {
-  recommendation: "manual_review" | "dispute_candidate";
+  recommendation: "manual_review" | "dispute_candidate" | "not_applicable";
   reason: string;
   status?: AuthStatus;
   authorization_number?: string;
@@ -56,14 +56,44 @@ export type Snapshot = {
     id: string;
     number: string;
     created_at: string;
+    details?: {
+      patient_name?: string;
+      patient_id?: string;
+      procedure?: string;
+      procedure_code?: string;
+      payer?: string;
+      provider?: string;
+      billed_amount?: number;
+      denial_date?: string | null;
+      claim_date?: string;
+      paid_amount?: number | null;
+      practice_case?: string;
+      sample_key?: string;
+      sample_seed_complete?: boolean;
+      suggested_authorization?: {
+        authorization_number: string;
+        valid_from: string;
+        valid_to: string;
+      };
+    };
     identity: {
+      tenant_id: string;
       source_encounter_id: string;
       source_account_id: string;
       encounter_id: string;
       account_id: string;
     };
-    claim: { claim_id: string; service_date: string; denial_reason: string };
+    claim: {
+      claim_id: string;
+      service_date: string;
+      status?: "denied" | "paid" | "pending";
+      denial_reason: string | null;
+      tenant_id: string;
+      account_id: string;
+      encounter_id: string;
+    };
   };
+  encounters: Snapshot["scenario"][];
   publications: Publication[];
   events: HistoryEvent[];
   receipts: {

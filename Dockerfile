@@ -16,6 +16,7 @@ COPY db ./db
 COPY schemas ./schemas
 COPY fixtures ./fixtures
 COPY tests ./tests
+COPY web/src/learning.ts web/src/types.ts ./web/src/
 COPY --from=web-build /app/dist/web ./dist/web
 USER node
 ENTRYPOINT ["node", "src/cli.js"]

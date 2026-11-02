@@ -60,11 +60,9 @@ export function createWebApp(service) {
         /* Invalid origins are not trusted. */
       }
       if (origin && !sameOrigin) {
-        return res
-          .status(403)
-          .json({
-            error: "Open the demo locally before performing this action.",
-          });
+        return res.status(403).json({
+          error: "Open the demo locally before performing this action.",
+        });
       }
     }
     next();
@@ -102,6 +100,14 @@ export function createWebApp(service) {
     action(() => service.startScenario()),
   );
   app.post(
+    "/api/samples",
+    action(() => service.addSamples()),
+  );
+  app.post(
+    "/api/scenarios/:id/select",
+    action((req) => service.selectScenario(req.params.id)),
+  );
+  app.post(
     "/api/scenarios/:id/events",
     action((req) => service.send(req.params.id, req.body || {})),
   );
@@ -116,6 +122,9 @@ export function createWebApp(service) {
   app.post(
     "/api/scenarios/:id/review",
     action((req) => service.review(req.params.id)),
+  );
+  app.get("/api/scenarios/:id/events/:eventId/evidence", async (req, res) =>
+    res.json(await service.evidence(req.params.id, req.params.eventId)),
   );
   app.get("/api/evidence", (_req, res) =>
     res.json({
