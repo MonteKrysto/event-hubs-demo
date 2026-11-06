@@ -5,12 +5,8 @@ import { demoEvidence } from "./demo-evidence.js";
 import { readFileSync } from "node:fs";
 import { sampleEncounters, newEncounterDetails } from "./sample-encounters.js";
 
-export class DemoError extends Error {
-  constructor(message, status = 400) {
-    super(message);
-    this.status = status;
-  }
-}
+import { DemoError } from "./demo-error.js";
+export { DemoError } from "./demo-error.js";
 
 export class DemoService {
   constructor(history, publisher = publish) {
@@ -235,8 +231,13 @@ export class DemoService {
         VALUES ($1,$2,$3,$4,'pending')`,
         [event.event_id, id, event.source_sequence, event],
       );
+      if (this.integration) await this.integration.queueWebhook(client, id, event);
       return event;
     });
+    if (this.integration) {
+      const webhook = await this.integration.deliverWebhook(event.event_id);
+      return { event, webhook };
+    }
     return this.deliver(event);
   }
 
@@ -250,6 +251,9 @@ export class DemoService {
     );
     if (!result.rowCount)
       throw new DemoError("This event could not be found.", 404);
+    if (this.integration) {
+      return this.integration.replay(id, eventId);
+    }
     await this.history.pool.query(
       "UPDATE ui_publications SET publication_state='pending',error=NULL,updated_at=clock_timestamp() WHERE event_id=$1",
       [eventId],
@@ -458,6 +462,9 @@ export class DemoService {
               : "unavailable",
           last_seen: heartbeat?.seen_at || null,
         },
+        ...(this.integration
+          ? { integration: await this.integration.snapshot(client, current.id) }
+          : {}),
       };
     }, "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
   }

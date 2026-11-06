@@ -25,6 +25,16 @@ export function learningState(state: Snapshot) {
       : received;
   const saved =
     !!latest && state.events.some((row) => row.event_id === latest.event_id);
+  const webhook = state.integration?.webhooks.find((row) => row.event_id === latest?.event_id);
+  const receivedByWebhookService = state.integration?.inbox.some((row) => row.event_id === latest?.event_id);
+  const webhookMissing = !saved && !receivedByWebhookService && (webhook?.state === "skipped" || webhook?.state === "failed");
+  const deliveryMessage = !saved && webhookMissing
+    ? webhook?.state === "skipped"
+      ? "Saved in Humata. Its webhook was skipped. Open Delivery lab and choose Check Humata API to recover it."
+      : "Saved in Humata. Its webhook could not be delivered. Restore the webhook receiver in Delivery lab, or check the Humata API."
+    : !saved && receivedByWebhookService && state.integration?.controls.publisher_paused
+      ? "Safely received. Publishing to Event Hubs is paused in Delivery lab."
+      : null;
   const accepted =
     saved ||
     (!!publication?.acknowledgment &&
@@ -46,8 +56,9 @@ export function learningState(state: Snapshot) {
   const deliveryUnconfirmed =
     !saved &&
     !!publication &&
-    (publication.publication_state === "unconfirmed" ||
+    (webhookMissing || publication.publication_state === "unconfirmed" ||
       (publication.publication_state === "pending" &&
+        !state.integration?.controls.publisher_paused &&
         Date.now() - new Date(publication.created_at).getTime() > 30000));
   const stages = [
     {
@@ -105,6 +116,14 @@ export function learningState(state: Snapshot) {
       attention: reviewStale,
     },
   ];
+  if (webhook || receivedByWebhookService) stages.splice(1, 0, {
+    title: "Webhook / API receiver",
+    text: receivedByWebhookService ? `Update ${latest!.source_sequence} safely received`
+      : webhook?.state === "skipped" ? "Webhook skipped; API recovery needed"
+      : webhook?.state === "failed" ? "Webhook delivery failed" : "Waiting for webhook",
+    done: !!receivedByWebhookService,
+    attention: !!webhookMissing,
+  });
   let next: {
     step: number;
     title: string;
@@ -141,7 +160,7 @@ export function learningState(state: Snapshot) {
       step: 2,
       title: "Check this delivery before continuing",
       description:
-        "Acceptance has not been confirmed. Inspect the latest event and retry the same event if needed.",
+        deliveryMessage || "Acceptance has not been confirmed. The outbox publisher will retry; inspect the delivery details if needed.",
       label: "Show delivery details",
       action: "retry",
     };
@@ -213,6 +232,7 @@ export function learningState(state: Snapshot) {
     currentReview,
     reviewStale,
     deliveryUnconfirmed,
+    deliveryMessage,
     stages,
     next,
   };

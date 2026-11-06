@@ -86,3 +86,60 @@ CREATE TABLE IF NOT EXISTS service_heartbeats (
     status TEXT NOT NULL,
     seen_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+
+-- The browser's simulated vendor and our receiver share a local PostgreSQL
+-- instance, but communicate over HTTP and commit separate transactions.
+-- ui_publications is the simulated Humata change history. Only the Kafka sink
+-- writes the downstream events table, including during API recovery.
+CREATE TABLE IF NOT EXISTS integration_state (
+    scenario_id UUID PRIMARY KEY REFERENCES ui_scenarios(id),
+    receiver_available BOOLEAN NOT NULL DEFAULT TRUE,
+    publisher_paused BOOLEAN NOT NULL DEFAULT FALSE,
+    api_available BOOLEAN NOT NULL DEFAULT TRUE,
+    skip_next_webhook BOOLEAN NOT NULL DEFAULT FALSE,
+    automatic_recovery BOOLEAN NOT NULL DEFAULT FALSE,
+    recovery_cursor BIGINT NOT NULL DEFAULT 0,
+    last_recovery_at TIMESTAMPTZ,
+    last_recovery_attempt_at TIMESTAMPTZ,
+    recovery_error TEXT,
+    recovery_token UUID,
+    recovery_until TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS integration_webhooks (
+    event_id UUID PRIMARY KEY REFERENCES ui_publications(event_id),
+    state TEXT NOT NULL CHECK (state IN ('queued','delivered','failed','skipped')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    lease_token UUID,
+    lease_until TIMESTAMPTZ,
+    last_error TEXT
+);
+CREATE TABLE IF NOT EXISTS integration_inbox (
+    event_id UUID PRIMARY KEY,
+    scenario_id UUID NOT NULL REFERENCES ui_scenarios(id),
+    event JSONB NOT NULL,
+    received_via TEXT NOT NULL CHECK (received_via IN ('webhook','api')),
+    received_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS integration_inbox_revision ON integration_inbox
+    ((event->>'tenant_id'),(event->>'source_account_id'),(event->>'source_encounter_id'),((event->>'source_sequence')::BIGINT));
+CREATE TABLE IF NOT EXISTS integration_outbox (
+    event_id UUID PRIMARY KEY REFERENCES integration_inbox(event_id),
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    lease_token UUID,
+    lease_until TIMESTAMPTZ,
+    last_error TEXT,
+    sent_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS integration_outbox_pending ON integration_outbox(next_attempt_at) WHERE state='pending';
+CREATE TABLE IF NOT EXISTS integration_activity (
+    id BIGSERIAL PRIMARY KEY,
+    scenario_id UUID NOT NULL REFERENCES ui_scenarios(id),
+    event_id UUID,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS integration_activity_scenario ON integration_activity(scenario_id,id DESC);

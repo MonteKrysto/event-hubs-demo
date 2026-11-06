@@ -1,6 +1,6 @@
 # Browser demo walkthrough
 
-The browser demo adds two React/TypeScript interfaces to the existing integration. Buttons publish real Kafka events to the Event Hubs emulator. The existing Node.js receiver saves them into PostgreSQL. Flow then reads that saved history when you explicitly request a pull.
+The browser demo adds two React/TypeScript interfaces to the existing integration. Authorization buttons save a Humata decision and trigger a signed HTTP webhook. Our receiver saves the event with a pending outbox entry; a background publisher sends it to the Event Hubs emulator over Kafka. The existing Kafka receiver saves it into PostgreSQL event history. Flow reads that history when you explicitly request a pull.
 
 ## Start the demo
 
@@ -101,6 +101,55 @@ The main screen keeps the encounter and its actions in focus. Supporting informa
 - **How the connection works** below the apps explains the transport and displays progress for the latest update.
 - **How it works** at the top opens a short walkthrough.
 
+## Delivery lab: failures, duplicates, and API recovery
+
+Run `make web`, refresh the browser, choose **New encounter**, and expand **Delivery lab** under the Humata authorization card. Controls apply only to the selected encounter and survive application restarts. The activity list and counters show actual persisted results. API recovery is manual by default so a missed delivery stays visible while you inspect it.
+
+### A failed webhook delivery
+
+1. Click **Stop webhook receiver**.
+2. Choose **Approve authorization**, or another main authorization action.
+3. Humata keeps the decision. Its signed webhook gets HTTP 503, and no inbox or outgoing event is created. Flow retains its earlier loaded data.
+4. Click **Restore receiver & retry**. The next worker tick retries failed deliveries immediately, using their original event IDs and revisions.
+5. Wait for the Kafka receiver to save the update, then choose **Load latest update** in Flow.
+
+While delivery is failing, the simulated vendor retries with increasing delays starting at 15 seconds and capped at 60 seconds. Its retry jobs survive restarts. The control only makes the webhook endpoint unavailable; PostgreSQL, the API recovery path, and Event Hubs remain available.
+
+### A duplicate webhook
+
+1. Save an authorization decision and let it reach our receiver.
+2. Click **Send duplicate webhook**, repeatedly if desired.
+3. **Repeat deliveries ignored** increases. **Unique updates received** stays unchanged, and no additional outgoing event is created.
+
+The sender performs another real HTTP request with the original payload and event ID. A PostgreSQL uniqueness rule handles simultaneous copies safely. If the publisher itself repeats a Kafka message after losing an acknowledgment, the Kafka history receiver independently recognizes that event ID.
+
+### A missed update recovered through the API
+
+1. Click **Skip next webhook**. The notice confirms that the experiment is armed.
+2. Choose an authorization action. This consumes the flag: the source decision is saved, but no webhook is sent or scheduled for retry. The latest status in Humata changes while shared history and Flow stay behind.
+3. Click **Check Humata API**.
+4. The recovery job makes authenticated HTTP requests to the simulated Humata change-history API. It finds changes after its saved bookmark, ignores updates already accepted through webhooks, and queues missing ones through the same receiving transaction.
+5. **Recovered through API** increases. After the normal Kafka path saves the update, choose **Load latest update** in Flow.
+6. Check the API again. With no newer changes, no extra event is created.
+
+Enable **Also check the API automatically every 30 seconds** to see scheduled recovery. Source history is paginated and bounded at the newest revision observed when the scan starts; newer changes wait for the next check. The bookmark is per encounter. A page’s inbox entries, outgoing events, and next bookmark commit together. If a page fails, that page is retried; earlier committed pages remain saved. A failed check does not update the time of the last completed catch-up.
+
+![Delivery lab after recovering a missed approval through the API](screenshots/delivery-recovery.png)
+
+### Other failure controls
+
+Under **More failure controls**, enable **Pause publishing to Event Hubs**, then save a decision. The webhook succeeds because its message is durably saved with an outbox row. Sharing waits until you clear the checkbox. This pauses our worker rather than stopping the broker. Actual broker failures also leave pending rows, generate error logs, and retry with increasing delays.
+
+Enable **Make the Humata API unavailable**, then run an API check. The check fails and keeps its bookmark. Clear the checkbox and check again to resume recovery. These deliberate HTTP failures are shown in the activity list without being logged as unexpected server errors; real database and connection failures remain errors.
+
+Recovering an older update preserves it in history without replacing a newer authorization status. Flow continues using its explicit loaded snapshot until you load again.
+
+### What this simulation assumes
+
+The mock vendor supports stable event IDs, increasing per-encounter revisions, and a complete retained change history. A real vendor might provide only current-state records, shorter retention, different pagination, or different retry limits; those contracts must be confirmed. A current-state API cannot reconstruct every missed intermediate transition.
+
+Source state and integration tables share the local database and Node server for convenience. Webhooks and recovery nevertheless cross actual HTTP endpoints, with independent database transactions. The integration receiver resolves identity from its crosswalk and does not query Humata’s source tables. Only the simulated vendor API reads source history. This is an executable learning example, not a production webhook security or operational specification. No external Humata service is called.
+
 Kafka is the protocol used by the Node producer and receiver to communicate with Microsoft’s local Event Hubs emulator. There is no separate Kafka server. Only the receiver saves received events in PostgreSQL; Flow reads them from that database when you load an update. Replaying an older event does not replace a newer source decision.
 
 ## What runs underneath
@@ -113,18 +162,21 @@ Kafka is the protocol used by the Node producer and receiver to communicate with
 | Decision-specific source evidence | [src/demo-evidence.js](../src/demo-evidence.js) |
 | HTTP API and live updates | [src/web-server.js](../src/web-server.js) |
 | Scenario, publication, pull, and review operations | [src/demo-service.js](../src/demo-service.js) |
+| Webhook receiver, durable outbox worker, source API, and recovery | [src/integration.js](../src/integration.js) |
+| Delivery lab controls | [web/src/DeliveryLab.tsx](../web/src/DeliveryLab.tsx) |
 | Fictional encounter catalog | [src/sample-encounters.js](../src/sample-encounters.js) |
 | Kafka producer and receiver | [src/transport.js](../src/transport.js) |
 | Database tables | [db/schema.sql](../db/schema.sql) |
 
 The Node API serves the built React files and sends browser updates through Server-Sent Events. It checks PostgreSQL about once a second and broadcasts current state. Event Hubs availability is checked periodically; receiver availability comes from broker heartbeat instrumentation.
 
-The browser API records publication metadata in `ui_publications`. It never inserts a received event into `events`; only the Kafka receiver does that. `ui_pulls` stores Flow snapshots and `ui_reviews` stores their review results. These browser scenarios are separate from the CLI's `demo_scenarios` and `flow_batches` fixtures.
+The source simulator records immutable decisions and delivery metadata in `ui_publications`. Vendor retries are tracked in `integration_webhooks`; our receiver commits `integration_inbox` and `integration_outbox` together. `integration_state` stores controls and recovery bookmarks, while `integration_activity` records the teaching timeline. None of those operations insert a received event into `events`; only the Kafka receiver does that. `ui_pulls` stores Flow snapshots and `ui_reviews` stores their review results. These browser scenarios are separate from the CLI's `demo_scenarios` and `flow_batches` fixtures. Older decisions made before the webhook extension retain their original direct-publication history.
 
 ## Tests and development
 
 ```sh
 make test             # Node, PostgreSQL, HTTP, and snapshot behavior
+make test-recovery    # Webhook/outbox failure cases and API catch-up
 make test-acceptance  # Real Kafka acceptance exercise
 ```
 

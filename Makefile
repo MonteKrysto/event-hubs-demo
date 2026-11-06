@@ -10,7 +10,7 @@ APP = $(COMPOSE) run --rm --no-deps app
 NPM = $(COMPOSE) run --rm --no-deps --entrypoint npm app
 
 .PHONY: help check env setup config pull build check-license up demo run ready produce \
-	flow-pull inspect sample db shell test-unit test test-acceptance test-all \
+	flow-pull inspect sample db shell test-unit test test-recovery test-acceptance test-all \
 	status logs stop down restart reset web
 
 help: ## Show commands and optional arguments (default)
@@ -82,6 +82,10 @@ test-unit: build ## Run domain-only Node.js tests without starting services
 test: build ## Start PostgreSQL and run the Node.js/database test suite
 	@$(COMPOSE) up -d --wait postgres
 	@$(NPM) test
+
+test-recovery: build ## Test webhooks, duplicate protection, outbox retries, and API recovery
+	@$(COMPOSE) up -d --wait postgres
+	@$(COMPOSE) run --rm --no-deps --entrypoint node app --test tests/integration.test.js tests/learning.test.js
 
 test-acceptance: up ## Test real Kafka traffic, replay, quarantine, and Flow interpretation
 	@$(NPM) run test:acceptance

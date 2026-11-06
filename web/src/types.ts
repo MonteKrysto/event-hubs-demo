@@ -112,4 +112,21 @@ export type Snapshot = {
   receiver: { status: string; last_seen: string | null };
   broker: { status: string; checked_at: string | null };
   database: { status: string };
+  integration?: {
+    controls: {
+      receiver_available: boolean;
+      publisher_paused: boolean;
+      api_available: boolean;
+      skip_next_webhook: boolean;
+      automatic_recovery: boolean;
+      recovery_cursor: string;
+      last_recovery_at: string | null;
+      last_recovery_attempt_at: string | null;
+      recovery_error: string | null;
+    };
+    stats: { received: number; recovered: number; duplicates: number; pending: number; missing: number };
+    inbox: { event_id: string; received_via: "webhook" | "api"; received_at: string }[];
+    webhooks: { event_id: string; source_sequence: string; state: "queued" | "delivered" | "failed" | "skipped"; attempts: number; last_error: string | null }[];
+    activity: { id: string; event_id: string | null; kind: string; message: string; created_at: string }[];
+  };
 };

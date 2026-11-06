@@ -171,3 +171,30 @@ test("an evaluation of an empty load does not invent a newer decision or success
     reviewChecks(state).every((check) => check.result === "unavailable"),
   );
 });
+
+test("a skipped webhook gives immediate recovery instructions without implying an in-flight delivery", () => {
+  const state = initial();
+  const event = scenario()[0];
+  state.publications = [publication(event, null)];
+  state.integration = { webhooks: [{ event_id: event.event_id, state: "skipped" }], inbox: [], controls: {} };
+  const journey = learningState(state);
+  assert.equal(journey.deliveryUnconfirmed, true);
+  assert.match(journey.deliveryMessage, /Check Humata API/);
+  assert.equal(journey.stages[1].done, false);
+  assert.equal(journey.accepted, false);
+});
+
+test("receiver acceptance is separate from broker acceptance and explains a paused publisher", () => {
+  const state = initial();
+  const event = scenario()[0];
+  state.publications = [publication(event, null)];
+  state.publications[0].created_at = new Date(Date.now() - 60000).toISOString();
+  state.integration = { webhooks: [{ event_id: event.event_id, state: "delivered" }],
+    inbox: [{ event_id: event.event_id }], controls: { publisher_paused: true } };
+  const journey = learningState(state);
+  assert.match(journey.deliveryMessage, /Publishing to Event Hubs is paused/);
+  assert.equal(journey.stages[1].done, true);
+  assert.equal(journey.stages[2].done, false);
+  assert.equal(journey.saved, false);
+  assert.equal(journey.deliveryUnconfirmed, false, "an intentional publishing pause is not an abandoned delivery");
+});

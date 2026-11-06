@@ -6,9 +6,11 @@ import { resolve } from "node:path";
 import { History } from "./history.js";
 import { DemoService, DemoError } from "./demo-service.js";
 import { kafka, TOPIC } from "./transport.js";
+import { IntegrationDemo } from "./integration.js";
 
-export function createWebApp(service) {
+export function createWebApp(service, integrationOptions = {}) {
   const app = express();
+  const integration = new IntegrationDemo(service, integrationOptions);
   const instanceId = randomUUID();
   const listeners = new Set();
   let revision = 0;
@@ -67,7 +69,18 @@ export function createWebApp(service) {
     }
     next();
   });
-  app.use(express.json({ limit: "16kb" }));
+  app.use(express.json({ limit: "16kb", verify: (req, _res, raw) => { req.rawBody = raw; } }));
+  app.post("/api/integration/webhook", async (req, res) => {
+    if (!integration.verify(req.rawBody, req.get("x-demo-signature")))
+      throw new DemoError("The webhook signature is invalid.", 401);
+    // Acknowledge only after inbox and outbox commit. Never wait for Kafka here.
+    res.json(await integration.receive(req.body));
+  });
+  app.get("/api/humata/scenarios/:id/changes", async (req, res) => {
+    if (req.get("x-demo-api-key") !== integration.apiKey)
+      throw new DemoError("The Humata API key is invalid.", 401);
+    res.json(await integration.sourcePage(req.params.id, req.query.after, req.query.through));
+  });
   app.get("/api/state", async (_req, res) => res.json(await refresh()));
   app.get("/api/stream", async (req, res) => {
     res.set({
@@ -95,6 +108,8 @@ export function createWebApp(service) {
     await refresh();
     res.json({ result });
   };
+  app.post("/api/scenarios/:id/delivery-controls", action((req) => integration.controls(req.params.id, req.body || {})));
+  app.post("/api/scenarios/:id/recover", action((req) => integration.recover(req.params.id)));
   app.post(
     "/api/scenarios",
     action(() => service.startScenario()),
@@ -149,7 +164,7 @@ export function createWebApp(service) {
         : error.type === "entity.parse.failed"
           ? 400
           : 503;
-    if (status >= 500) console.error(`Web demo: ${error.message}`);
+    if (status >= 500 && !error.simulated) console.error(`Web demo: ${error.message}`);
     const message =
       error instanceof DemoError
         ? error.message
@@ -185,11 +200,14 @@ export function createWebApp(service) {
   healthPoll.unref();
   return {
     app,
+    integration,
+    startWorkers: (baseUrl, options) => integration.start(baseUrl, options),
     checkBroker,
     close: () => {
       clearInterval(poll);
       clearInterval(healthPoll);
       for (const res of listeners) res.end();
+      return integration.stop();
     },
   };
 }
@@ -203,11 +221,12 @@ if (
   const web = createWebApp(new DemoService(history));
   web.checkBroker().catch((error) => console.error(error.message));
   const port = Number(process.env.PORT || 8088);
-  const server = web.app.listen(port, "0.0.0.0", () =>
-    console.log(`Fiber demo: http://localhost:${port}`),
-  );
-  const stop = () => {
-    web.close();
+  const server = web.app.listen(port, "0.0.0.0", () => {
+    web.startWorkers(`http://127.0.0.1:${server.address().port}`);
+    console.log(`Fiber demo: http://localhost:${port}`);
+  });
+  const stop = async () => {
+    await web.close();
     server.close(async () => {
       await history.close();
       process.exit(0);

@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import type { AuthStatus, Publication, Snapshot } from "./types";
 import { latestEvent, learningState } from "./learning";
+import { DeliveryLab } from "./DeliveryLab";
 import {
   FlowFreshness,
   JourneyProgress,
@@ -314,10 +315,14 @@ function App() {
       (row) => row.event_id === publication.event_id,
     );
     const pending = publication.publication_state === "pending";
+    const sourceWebhook = state?.integration?.webhooks.find((row) => row.event_id === publication.event_id);
+    const receivedByIntegration = state?.integration?.inbox.some((row) => row.event_id === publication.event_id);
+    const webhookMissing = !receivedByIntegration && (sourceWebhook?.state === "failed" || sourceWebhook?.state === "skipped");
     const failed =
       !stored &&
-      (publication.publication_state === "unconfirmed" ||
+      (webhookMissing || publication.publication_state === "unconfirmed" ||
         (pending &&
+          !state?.integration?.controls.publisher_paused &&
           Date.now() - new Date(publication.created_at).getTime() > 30000));
     const expandedHere = expanded === publication.event_id;
     return (
@@ -350,6 +355,10 @@ function App() {
           >
             {stored
               ? "Saved in shared history"
+              : webhookMissing
+                ? sourceWebhook?.state === "skipped" ? "Webhook skipped; recover via API" : "Webhook delivery failed"
+              : receivedByIntegration && state?.integration?.controls.publisher_paused
+                ? "Queued; publishing paused"
               : failed
                 ? "Delivery unconfirmed"
                 : pending
@@ -414,7 +423,7 @@ function App() {
                 }
               >
                 <RefreshCw size={13} />
-                {failed ? "Retry this event" : "Replay this event"}
+                {state?.integration ? "Resend this webhook" : failed ? "Retry this event" : "Replay this event"}
               </button>
             )}
           </div>
@@ -847,13 +856,16 @@ function App() {
                     </button>
                   </div>
                   <p className="simulation-note">
-                    Demo actions: each button saves and shares a simulated
-                    authorization update.
+                    Each button saves a decision in Humata. Delivery progress appears below.
                   </p>
                   <ActionFeedback
                     state={state}
                     busy={busy}
-                    onDetails={() => setDeliveryDetails(true)}
+                    onDetails={() => {
+                      const lab = document.querySelector<HTMLDetailsElement>("#delivery-lab");
+                      if (lab) { lab.open = true; lab.scrollIntoView({ block: "nearest" }); }
+                      else setDeliveryDetails(true);
+                    }}
                   />{" "}
                   <details
                     className="approval-form"
@@ -920,6 +932,7 @@ function App() {
                     </button>
                   )}
                 </div>
+                {state && <DeliveryLab key={state.scenario.id} state={state} locked={locked} act={act} />}
                 <details
                   className="card activity-card technical-details"
                   id="publication-activity"
@@ -1163,7 +1176,9 @@ function App() {
               <ChevronDown size={15} />
             </summary>
             <p>
-              Humata sends an event to the local Event Hubs emulator using the
+              Humata sends a webhook to our receiver. The receiver saves an inbox
+              entry and an outgoing event together. A background publisher sends
+              that event to the local Event Hubs emulator using the
               Kafka protocol. A separate receiver saves it in PostgreSQL. Flow
               reads that saved history when you load an update.
             </p>

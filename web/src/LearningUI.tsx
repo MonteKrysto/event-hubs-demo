@@ -10,6 +10,7 @@ import {
   Radio,
   Search,
   ShieldCheck,
+  Send,
   XCircle,
 } from "lucide-react";
 import type { Snapshot } from "./types";
@@ -67,7 +68,9 @@ export function AuthorizationComparison({ state }: { state: Snapshot }) {
 export function JourneyProgress({ state }: { state: Snapshot | null }) {
   if (!state) return null;
   const journey = learningState(state);
-  const icons = [HeartPulse, Radio, Database, ArrowRight, ClipboardCheck];
+  const icons = journey.stages.length === 6
+    ? [HeartPulse, Send, Radio, Database, ArrowRight, ClipboardCheck]
+    : [HeartPulse, Radio, Database, ArrowRight, ClipboardCheck];
   return (
     <section className="journey-section" aria-label="Latest update journey">
       <div className="journey-caption">
@@ -82,7 +85,7 @@ export function JourneyProgress({ state }: { state: Snapshot | null }) {
             : "Flow has not loaded authorization data yet."}
         </span>
       </div>
-      <div className="pipeline" aria-label="Integration progress">
+      <div className={`pipeline ${journey.stages.length === 6 ? "integration-pipeline" : ""}`} aria-label="Integration progress">
         {journey.stages.map((stage, index) => {
           const Icon = icons[index];
           return (
@@ -97,7 +100,7 @@ export function JourneyProgress({ state }: { state: Snapshot | null }) {
                 <strong>{stage.title}</strong>
                 <span>{stage.text}</span>
               </div>
-              {index < 4 && <ArrowRight size={14} className="pipeline-arrow" />}
+              {index < journey.stages.length - 1 && <ArrowRight size={14} className="pipeline-arrow" />}
             </div>
           );
         })}
@@ -132,7 +135,7 @@ export function ActionFeedback({
       className={`action-feedback ${journey.deliveryUnconfirmed ? "unconfirmed" : ""}`}
       role="status"
     >
-      {saving || (!journey.saved && !journey.deliveryUnconfirmed) ? (
+      {journey.deliveryMessage && !saving ? <Clock3 size={19} /> : saving || (!journey.saved && !journey.deliveryUnconfirmed) ? (
         <LoaderCircle size={19} className="spin" />
       ) : (
         <CheckCircle2 size={19} />
@@ -144,7 +147,7 @@ export function ActionFeedback({
         <p>
           {saving
             ? "The authorization update is being saved and shared."
-            : journey.deliveryUnconfirmed
+            : journey.deliveryMessage ? journey.deliveryMessage : journey.deliveryUnconfirmed
               ? "Your decision is saved in Humata, but sharing could not be confirmed."
               : journey.saved
                 ? journey.inFlow
@@ -173,14 +176,14 @@ export function FlowFreshness({ state }: { state: Snapshot }) {
         <strong>
           {journey.saved
             ? "New authorization update available"
-            : "An update is being shared"}
+            : journey.deliveryUnconfirmed ? "Authorization update has not arrived yet" : "An update is being shared"}
         </strong>
         <p>
           {journey.saved
             ? journey.loaded
               ? "Flow still shows the earlier decision. Load the latest update to see the change."
               : "Load the latest update to see Humata’s decision here."
-            : "Flow will keep its current information until sharing finishes and you load the update."}
+            : journey.deliveryMessage || "Flow will keep its current information until sharing finishes and you load the update."}
         </p>
       </div>
     </div>

@@ -56,6 +56,9 @@ Choose any of the six authorization actions in Humata; all are visible on the en
 
 Use **Add sample encounters** to add 48 fictional encounters and 126 authorization events through the Kafka pipeline. Select a case from the **Encounter** list; expand **Encounter details** for payer, procedure, provider, claim amount, and dates. The **Original claim denial** stays separate from the side-by-side **Humata’s latest status** and **Loaded in Flow** values. Each encounter retains its own loaded data and evaluation. Existing data is kept, and adding the sample set again does not duplicate it.
 
+Expand **Delivery lab** in Humata to simulate HTTP delivery failures, duplicate webhooks, and a skipped webhook recovered through Humata’s simulated history API. Start with **New encounter** for a clean experiment. Optional controls pause our Event Hubs publisher or make the source API unavailable. The [delivery lab walkthrough](docs/browser-demo-walkthrough.md#delivery-lab-failures-duplicates-and-api-recovery) explains each experiment.
+
+New browser decisions follow **Humata → signed HTTP webhook → receiver inbox + outbox → Event Hubs over Kafka → history receiver → PostgreSQL → explicit Flow load**. The API recovery job fetches the simulated source history over HTTP and uses the same inbox/outbox transaction. Recovery bookmarks commit with each saved page; they never advance just because a request was made. Humata’s source history and our receiver tables share one local PostgreSQL instance for convenience, with separate transactions and HTTP boundaries. The CLI retains its original direct Kafka producer.
 
 The existing command-line workflow below remains available and uses its own saved scenario.
 
@@ -79,6 +82,7 @@ make help        # List every target.
 | `make sample > scenario.json` | Generate fresh event JSON; build output goes to stderr |
 | `make test-unit` | Run domain tests without starting services |
 | `make test` | Run the Node.js suite against PostgreSQL |
+| `make test-recovery` | Test HTTP webhook failures, duplicates, outbox retries, and paginated API recovery |
 | `make test-acceptance` / `make test-all` | Run Kafka acceptance / both test suites |
 | `make status` / `make logs SERVICES=sink` | Show containers / follow receiver logs |
 | `make stop` / `make down` | Stop / remove containers while preserving database data |
